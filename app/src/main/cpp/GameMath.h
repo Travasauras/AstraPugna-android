@@ -1,5 +1,5 @@
-#ifndef STELLARSIEGE_GAMEMATH_H
-#define STELLARSIEGE_GAMEMATH_H
+#ifndef ASTRAPUGNA_GAMEMATH_H
+#define ASTRAPUGNA_GAMEMATH_H
 
 #include <algorithm>
 #include <cmath>
@@ -60,4 +60,4 @@ struct Rng {
     int irange(int lo, int hi) { return lo + (int) (next() % (uint32_t) (hi - lo + 1)); }
 };
 
-#endif //STELLARSIEGE_GAMEMATH_H
+#endif //ASTRAPUGNA_GAMEMATH_H

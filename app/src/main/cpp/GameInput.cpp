@@ -85,7 +85,7 @@ void Game::buildButtons() {
     float tb = 150 * ui_, tpad = 6 * ui_;
     buttons_.push_back({{screenW_ - 2 * (tb + tpad), tpad, tb, topH_ - 2 * tpad}, A_IDLE, T_WORKER,
                         "IDLE: " + std::to_string(idle), "", idle > 0, false});
-    buttons_.push_back({{screenW_ - (tb + tpad), tpad, tb, topH_ - 2 * tpad}, A_ARMY, T_TROOPER,
+    buttons_.push_back({{screenW_ - (tb + tpad), tpad, tb, topH_ - 2 * tpad}, A_ARMY, T_MARINE,
                         "ARMY: " + std::to_string(armyCount), "", armyCount > 0, false});
 
     float pad = 8 * ui_, bw = 112 * ui_, bh = (panelH_ - 3 * pad) / 2;
@@ -100,7 +100,7 @@ void Game::buildButtons() {
         buttons_.push_back({slot(i), a, t, td.name, sub, reqOk, minerals_[PLAYER] < td.cost});
     };
 
-    if (mode_ == MODE_PLACE || mode_ == MODE_ATTACK) {
+    if (mode_ != MODE_NORMAL) {
         buttons_.push_back({slot(5), A_CANCEL, T_COUNT, "CANCEL", "", true, false});
         return;
     }
@@ -111,8 +111,15 @@ void Game::buildButtons() {
     if (isBuilding(f)) {
         if (!f.complete) return;
         if (f.type == T_HQ) costButton(0, A_TRAIN, T_WORKER);
-        if (f.type == T_BARRACKS) costButton(0, A_TRAIN, T_TROOPER);
-        if (f.type == T_FACTORY) costButton(0, A_TRAIN, T_TANK);
+        if (f.type == T_BARRACKS) {
+            costButton(0, A_TRAIN, T_MARINE);
+            costButton(1, A_TRAIN, T_SNIPER);
+            costButton(2, A_TRAIN, T_OFFICER);
+        }
+        if (f.type == T_FACTORY) {
+            costButton(0, A_TRAIN, T_TANK);
+            costButton(1, A_TRAIN, T_ROVER);
+        }
         if (!f.queue.empty()) buttons_.push_back({slot(5), A_DEQUEUE, T_COUNT, "CANCEL", "LAST", true, false});
         return;
     }
@@ -130,6 +137,17 @@ void Game::buildButtons() {
         buttons_.push_back({slot(0), A_ATTACK, T_COUNT, "ATTACK", "MOVE", true, false});
         buttons_.push_back({slot(1), A_STOP, T_COUNT, "STOP", "", true, false});
         buttons_.push_back({slot(2), A_HOLD, T_COUNT, "HOLD", "POSITION", true, false});
+        bool anyInfantry = false;
+        int riders = 0;
+        for (int id: sel_) {
+            anyInfantry |= isInfantry(ents_[id].type);
+            riders += (int) ents_[id].passengers.size();
+        }
+        if (anyInfantry) buttons_.push_back({slot(3), A_BOARD, T_COUNT, "BOARD", "VEHICLE", true, false});
+        if (riders > 0) {
+            buttons_.push_back({slot(4), A_UNLOAD, T_COUNT, "UNLOAD", std::to_string(riders) + " ABOARD", true,
+                                false});
+        }
     }
 }
 
@@ -175,6 +193,16 @@ void Game::doButton(const Button &b) {
             mode_ = MODE_ATTACK;
             message("TAP A TARGET OR LOCATION");
             break;
+        case A_BOARD:
+            mode_ = MODE_BOARD;
+            message("TAP A TANK OR ROVER");
+            break;
+        case A_UNLOAD:
+            for (int id: sel_) {
+                Entity *e = ent(id);
+                if (e && e->owner == PLAYER) unload(*e);
+            }
+            break;
         case A_CANCEL:
             mode_ = MODE_NORMAL;
             placeVisible_ = false;
@@ -205,7 +233,9 @@ void Game::doButton(const Button &b) {
             sel_.clear();
             for (int id: live_) {
                 const Entity &e = ents_[id];
-                if (e.alive && e.owner == PLAYER && !isBuilding(e) && e.type != T_WORKER) sel_.push_back(id);
+                if (e.alive && e.owner == PLAYER && !isBuilding(e) && e.type != T_WORKER && !inside(e)) {
+                    sel_.push_back(id);
+                }
             }
             break;
     }
@@ -218,7 +248,7 @@ void Game::doButton(const Button &b) {
 void Game::cleanSelection() {
     sel_.erase(std::remove_if(sel_.begin(), sel_.end(), [this](int id) {
         const Entity *e = ent(id);
-        return !e || (e->owner != PLAYER && !visibleToPlayer(*e) && !(isBuilding(*e) && e->seen));
+        return !e || inside(*e) || (e->owner != PLAYER && !visibleToPlayer(*e) && !(isBuilding(*e) && e->seen));
     }), sel_.end());
 }
 
@@ -244,7 +274,7 @@ int Game::pickEntity(Vec2 w, float tol) const {
     float bestScore = 1e18f;
     for (int id: live_) {
         const Entity &e = ents_[id];
-        if (!e.alive) continue;
+        if (!e.alive || inside(e)) continue;
         bool buildingLike = isBuilding(e);
         if (e.owner == ENEMY && !visibleToPlayer(e) && !(buildingLike && e.seen)) continue;
         if (e.type == T_MINERAL && vis_[idx(e.tx, e.ty)] == 0) continue;
@@ -275,6 +305,11 @@ void Game::onTap(Vec2 s) {
         mode_ = MODE_NORMAL;
         return;
     }
+    if (mode_ == MODE_BOARD) {
+        commandBoard(hit);
+        mode_ = MODE_NORMAL;
+        return;
+    }
 
     bool haveUnits = !selectedUnits().empty();
     bool haveProducer = false;
@@ -297,7 +332,9 @@ void Game::onTap(Vec2 s) {
                 sel_.clear();
                 for (int id: live_) {
                     const Entity &e = ents_[id];
-                    if (e.alive && e.owner == PLAYER && e.type == h.type && onScreen(e.pos)) sel_.push_back(id);
+                    if (e.alive && e.owner == PLAYER && e.type == h.type && !inside(e) && onScreen(e.pos)) {
+                        sel_.push_back(id);
+                    }
                 }
                 lastTapTime_ = -10;
             } else {
@@ -330,7 +367,7 @@ void Game::onBoxSelect(Vec2 a, Vec2 b) {
     std::vector<int> picked;
     for (int id: live_) {
         const Entity &e = ents_[id];
-        if (!e.alive || e.owner != PLAYER || isBuilding(e)) continue;
+        if (!e.alive || e.owner != PLAYER || isBuilding(e) || inside(e)) continue;
         float r = unitRadius(e);
         if (e.pos.x + r >= x0 && e.pos.x - r <= x1 && e.pos.y + r >= y0 && e.pos.y - r <= y1) picked.push_back(id);
     }
@@ -405,6 +442,32 @@ void Game::commandAttack(Vec2 w, int hit) {
     }
     formationMove(units, w, true);
     addFx(FX_MARK, w, w, 0.5f, 14, rgba(1, .3f, .25f));
+}
+
+void Game::commandBoard(int hit) {
+    Entity *v = ent(hit);
+    if (!v || v->owner != PLAYER || !isTransport(v->type)) {
+        message("TAP A TANK OR ROVER");
+        return;
+    }
+    int free = kTransportSlots - (int) v->passengers.size();
+    if (free <= 0) {
+        message(std::string(kTypes[v->type].name) + " IS FULL");
+        return;
+    }
+    // The closest soldiers claim the open seats.
+    std::vector<int> riders;
+    for (int id: selectedUnits()) {
+        if (isInfantry(ents_[id].type)) riders.push_back(id);
+    }
+    std::sort(riders.begin(), riders.end(),
+              [&](int a, int b) { return distSq(ents_[a].pos, v->pos) < distSq(ents_[b].pos, v->pos); });
+    if ((int) riders.size() > free) {
+        riders.resize(free);
+        message("NOT ENOUGH ROOM - " + std::to_string(free) + " BOARDING");
+    }
+    for (int id: riders) orderBoard(ents_[id], hit);
+    addFx(FX_MARK, v->pos, v->pos, 0.5f, 22, rgba(.3f, 1, .4f));
 }
 
 void Game::formationMove(const std::vector<int> &units, Vec2 p, bool attack) {

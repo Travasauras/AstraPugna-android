@@ -9,8 +9,11 @@
 const TypeDef kTypes[T_COUNT] = {
 //   name            bld    rad  tw th  hp    arm  speed  range      dmg  cd     splash sight      cost sup prov time  requires    producer
     {"WORKER",       false, 9,   0, 0,  40,   0,   88,    6,         5,   1.1f,  0,     7 * TILE,  50,  1,  0,   10,  T_COUNT,    T_HQ},
-    {"TROOPER",      false, 9,   0, 0,  45,   0,   80,    5 * TILE,  6,   0.8f,  0,     9 * TILE,  50,  1,  0,   14,  T_COUNT,    T_BARRACKS},
-    {"SIEGE TANK",   false, 15,  0, 0,  160,  1,   64,    7 * TILE,  28,  2.2f,  40,    10 * TILE, 150, 3,  0,   24,  T_COUNT,    T_FACTORY},
+    {"MARINE",       false, 9,   0, 0,  45,   0,   80,    5 * TILE,  6,   0.8f,  0,     9 * TILE,  50,  1,  0,   14,  T_COUNT,    T_BARRACKS},
+    {"SHARPSHOOTER", false, 9,   0, 0,  35,   0,   72,    8 * TILE,  24,  2.4f,  0,     10 * TILE, 75,  1,  0,   20,  T_COUNT,    T_BARRACKS},
+    {"OFFICER",      false, 9,   0, 0,  60,   1,   80,    4 * TILE,  4,   1.0f,  0,     9 * TILE,  100, 2,  0,   24,  T_FACTORY,  T_BARRACKS},
+    {"TANK",         false, 15,  0, 0,  160,  1,   64,    7 * TILE,  28,  2.2f,  40,    10 * TILE, 150, 3,  0,   24,  T_COUNT,    T_FACTORY},
+    {"ROVER",        false, 13,  0, 0,  120,  1,   128,   0,         0,   0,     0,     9 * TILE,  100, 2,  0,   18,  T_COUNT,    T_FACTORY},
     {"COMMAND HQ",   true,  0,   4, 4,  1500, 1,   0,     0,         0,   0,     0,     11 * TILE, 400, 0,  10,  60,  T_COUNT,    T_COUNT},
     {"SUPPLY DEPOT", true,  0,   2, 2,  400,  1,   0,     0,         0,   0,     0,     7 * TILE,  100, 0,  8,   18,  T_COUNT,    T_COUNT},
     {"BARRACKS",     true,  0,   3, 3,  1000, 1,   0,     0,         0,   0,     0,     8 * TILE,  150, 0,  0,   35,  T_DEPOT,    T_COUNT},
@@ -248,6 +251,16 @@ void Game::kill(Entity &e) {
     e.alive = false;
     e.hp = 0;
     const TypeDef &td = kTypes[e.type];
+    if (Entity *v = ent(e.transport)) {
+        v->passengers.erase(std::remove(v->passengers.begin(), v->passengers.end(), e.id), v->passengers.end());
+    }
+    if (isTransport(e.type)) {
+        // Passengers bail out of a wrecked vehicle, and a tank's driver climbs out as a marine.
+        unload(e);
+        if (e.type == T_TANK && e.owner >= 0) {
+            spawn(T_MARINE, e.owner, e.pos + fromAngle(e.facing + kPi) * (td.radius * 0.5f));
+        }
+    }
     if (td.building) {
         for (int y = e.ty; y < e.ty + td.tilesH; ++y) {
             for (int x = e.tx; x < e.tx + td.tilesW; ++x) {
@@ -441,7 +454,12 @@ void Game::message(const std::string &m) {
 // ---------------------------------------------------------------------------------------------
 
 void Game::updateUnit(Entity &e, float dt) {
+    if (inside(e)) {
+        updatePassenger(e, dt);
+        return;
+    }
     const TypeDef &td = kTypes[e.type];
+    const bool armed = td.damage > 0;
     e.cd -= dt;
     e.repath -= dt;
     e.scan -= dt;
@@ -458,7 +476,7 @@ void Game::updateUnit(Entity &e, float dt) {
     } else {
         switch (e.order) {
             case O_IDLE:
-                if (e.type != T_WORKER && e.scan <= 0) {
+                if (e.type != T_WORKER && armed && e.scan <= 0) {
                     e.scan = 0.25f;
                     int t = acquire(e, td.sight);
                     if (t >= 0) {
@@ -471,6 +489,7 @@ void Game::updateUnit(Entity &e, float dt) {
                 }
                 break;
             case O_HOLD: {
+                if (!armed) break;
                 Entity *t = ent(e.target);
                 if (!t || !canTarget(e, *t) || !inRange(e, *t)) {
                     t = nullptr;
@@ -488,14 +507,15 @@ void Game::updateUnit(Entity &e, float dt) {
                 if (follow(e, dt)) e.order = O_IDLE;
                 break;
             case O_ATTACK_MOVE: {
-                Entity *t = ent(e.target);
+                // Unarmed vehicles just drive; their passengers do the shooting.
+                Entity *t = armed ? ent(e.target) : nullptr;
                 if (t && (!canTarget(e, *t) || gap(e, *t) > td.sight * 1.25f)) {
                     t = nullptr;
                     e.target = -1;
                     e.path.clear();
                     e.pathIdx = 0;
                 }
-                if (!t && e.scan <= 0) {
+                if (!t && armed && e.scan <= 0) {
                     e.scan = 0.2f;
                     e.target = acquire(e, td.sight);
                     t = ent(e.target);
@@ -530,7 +550,18 @@ void Game::updateUnit(Entity &e, float dt) {
                     e.pathIdx = 0;
                     break;
                 }
-                fight(e, *t, dt, true);
+                if (armed) fight(e, *t, dt, true);
+                else approach(e, *t, 3.5f * TILE, dt);   // close in so passengers can fire
+                break;
+            }
+            case O_BOARD: {
+                Entity *v = ent(e.target);
+                if (!v || v->owner != e.owner || !isTransport(v->type) ||
+                    (int) v->passengers.size() >= kTransportSlots) {
+                    orderStop(e, false);
+                    break;
+                }
+                if (approach(e, *v, 6.f, dt)) board(e, *v);
                 break;
             }
             default:
@@ -569,6 +600,63 @@ void Game::updateUnit(Entity &e, float dt) {
         e.stuckCount = 0;
         e.stuckRef = e.pos;
     }
+}
+
+void Game::updatePassenger(Entity &e, float dt) {
+    Entity *v = ent(e.transport);
+    if (!v) {
+        e.transport = -1;
+        orderStop(e, false);
+        return;
+    }
+    e.pos = v->pos;
+    e.dest = v->pos;
+    e.cd -= dt;
+    e.scan -= dt;
+    e.flash = std::max(0.f, e.flash - dt);
+    e.moving = e.firing = false;
+    if (v->type != T_ROVER || kTypes[e.type].damage <= 0) return;
+
+    // Rover passengers shoot on the move, favoring whatever the driver was told to attack.
+    Entity *t = nullptr;
+    if (v->order == O_ATTACK) {
+        t = ent(v->target);
+        if (t && (!canTarget(e, *t) || !inRange(e, *t))) t = nullptr;
+    }
+    if (!t) {
+        t = ent(e.target);
+        if (t && (!canTarget(e, *t) || !inRange(e, *t))) t = nullptr;
+    }
+    if (!t && e.scan <= 0) {
+        e.scan = 0.2f;
+        t = ent(acquire(e, kTypes[e.type].range));
+    }
+    e.target = t ? t->id : -1;
+    if (t) fight(e, *t, dt, false);
+}
+
+void Game::board(Entity &e, Entity &vehicle) {
+    vehicle.passengers.push_back(e.id);
+    e.transport = vehicle.id;
+    e.pos = vehicle.pos;
+    e.order = O_IDLE;
+    e.target = -1;
+    e.path.clear();
+    e.pathIdx = 0;
+}
+
+void Game::unload(Entity &vehicle) {
+    float r = unitRadius(vehicle) + 10.f;
+    for (size_t i = 0; i < vehicle.passengers.size(); ++i) {
+        Entity *p = ent(vehicle.passengers[i]);
+        if (!p) continue;
+        p->transport = -1;
+        p->pos = vehicle.pos + fromAngle(vehicle.facing + kPi * 0.5f + i * kPi * 0.5f) * r;
+        orderStop(*p, false);
+        p->cd = 0.3f;
+        pushOutOfTerrain(*p);
+    }
+    vehicle.passengers.clear();
 }
 
 bool Game::mineralBusy(const Entity &m, int except) const {
@@ -828,7 +916,7 @@ void Game::resolveCollisions() {
     std::vector<int> units;
     units.reserve(live_.size());
     for (int id: live_) {
-        if (ents_[id].alive && !isBuilding(ents_[id])) units.push_back(id);
+        if (ents_[id].alive && !isBuilding(ents_[id]) && !inside(ents_[id])) units.push_back(id);
     }
     for (size_t i = 0; i < units.size(); ++i) {
         Entity &a = ents_[units[i]];
@@ -903,7 +991,7 @@ bool Game::inRange(const Entity &e, const Entity &t) const {
 }
 
 bool Game::canTarget(const Entity &e, const Entity &t) const {
-    if (!t.alive || t.owner == e.owner || t.owner == NEUTRAL) return false;
+    if (!t.alive || t.owner == e.owner || t.owner == NEUTRAL || inside(t)) return false;
     return e.owner != PLAYER || visibleToPlayer(t);
 }
 
@@ -912,20 +1000,33 @@ int Game::acquire(const Entity &e, float range) const {
     float bestScore = 1e9f;
     for (int id: live_) {
         const Entity &t = ents_[id];
-        if (!t.alive || t.owner == e.owner || t.owner == NEUTRAL) continue;
+        if (!t.alive || t.owner == e.owner || t.owner == NEUTRAL || inside(t)) continue;
         float g = gap(e, t);
         if (g > range) continue;
         if (e.owner == PLAYER && !visibleToPlayer(t)) continue;
         // Prefer things that shoot back, then workers, then structures.
         float score = g;
+        bool shootsBack = kTypes[t.type].damage > 0 || (t.type == T_ROVER && !t.passengers.empty());
         if (t.type == T_WORKER) score += 150.f;
-        else if (kTypes[t.type].damage <= 0) score += 400.f;
+        else if (!shootsBack) score += 400.f;
         if (score < bestScore) {
             bestScore = score;
             best = id;
         }
     }
     return best;
+}
+
+bool Game::buffed(const Entity &e) const {
+    if (isBuilding(e)) return false;
+    for (int id: live_) {
+        const Entity &o = ents_[id];
+        if (o.alive && o.type == T_OFFICER && o.owner == e.owner && o.id != e.id &&
+            distSq(o.pos, e.pos) <= kAuraRadius * kAuraRadius) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void Game::fight(Entity &e, Entity &t, float dt, bool canMove) {
@@ -937,7 +1038,7 @@ void Game::fight(Entity &e, Entity &t, float dt, bool canMove) {
         e.firing = true;
         if (e.cd <= 0) {
             fire(e, t);
-            e.cd = kTypes[e.type].cooldown;
+            e.cd = kTypes[e.type].cooldown * (buffed(e) ? kAuraCooldown : 1.f);
         }
     } else if (canMove) {
         moveToward(e, t, dt, 0.5f);
@@ -951,26 +1052,34 @@ void Game::fire(Entity &e, Entity &t) {
     float off = isBuilding(e) ? 16.f : td.radius + 7.f;
     Vec2 muzzle = e.pos + dir * off;
     float d = dist(muzzle, aim);
+    float dmg = td.damage * (buffed(e) ? kAuraDamage : 1.f);
     switch (e.type) {
         case T_WORKER:
             addFx(FX_SPARK, aim, aim, 0.15f, 6, rgba(1, .9f, .4f));
-            damage(t, td.damage, e.id);
+            damage(t, dmg, e.id);
             break;
-        case T_TROOPER: {
+        case T_MARINE:
+        case T_OFFICER: {
             Vec2 jitter{rng_.range(-4, 4), rng_.range(-4, 4)};
             addFx(FX_TRACER, muzzle, aim + jitter, 0.07f, 1.5f, rgba(1, .95f, .55f));
             addFx(FX_FLASH, muzzle, muzzle, 0.05f, 4, rgba(1, .9f, .5f));
-            damage(t, td.damage, e.id);
+            damage(t, dmg, e.id);
             break;
         }
+        case T_SNIPER:
+            addFx(FX_TRACER, muzzle, aim, 0.18f, 2.2f, rgba(.75f, .95f, 1));
+            addFx(FX_FLASH, muzzle, muzzle, 0.08f, 6, rgba(.8f, .95f, 1));
+            addFx(FX_SPARK, aim, aim, 0.15f, 6, rgba(.8f, .95f, 1));
+            damage(t, dmg, e.id);
+            break;
         case T_TANK:
             shots_.push_back({muzzle, aim, 0, std::max(0.12f, d / 650.f), -1, e.owner, e.id,
-                              td.damage, td.splash});
+                              dmg, td.splash});
             addFx(FX_FLASH, muzzle, muzzle, 0.1f, 9, rgba(1, .8f, .4f));
             break;
         case T_TURRET:
             shots_.push_back({muzzle, aim, 0, std::max(0.08f, d / 900.f), t.id, e.owner, e.id,
-                              td.damage, 0});
+                              dmg, 0});
             addFx(FX_FLASH, muzzle, muzzle, 0.06f, 6, rgba(.6f, .9f, 1));
             break;
         default:
@@ -1004,7 +1113,7 @@ void Game::updateShots(float dt) {
 void Game::splashDamage(Vec2 p, float radius, float amount, int owner, int attacker) {
     for (int id: live_) {
         Entity &e = ents_[id];
-        if (!e.alive || e.owner == owner || e.owner == NEUTRAL) continue;
+        if (!e.alive || e.owner == owner || e.owner == NEUTRAL || inside(e)) continue;
         float d;
         if (isBuilding(e)) {
             float hx, hy;
@@ -1019,7 +1128,8 @@ void Game::splashDamage(Vec2 p, float radius, float amount, int owner, int attac
 
 void Game::damage(Entity &t, float amount, int attacker) {
     if (!t.alive) return;
-    t.hp -= std::max(0.5f, amount - kTypes[t.type].armor);
+    float armor = kTypes[t.type].armor + (buffed(t) ? kAuraArmor : 0.f);
+    t.hp -= std::max(0.5f, amount - armor);
     t.flash = 0.12f;
     t.underAttack = 3.f;
     if (t.owner == PLAYER && alertCooldown_ <= 0 && !onScreen(t.pos)) {
@@ -1034,7 +1144,7 @@ void Game::damage(Entity &t, float amount, int attacker) {
     }
     // Idle soldiers shot from beyond their sight walk toward the shooter.
     const Entity *a = ent(attacker);
-    if (a && !isBuilding(t) && t.type != T_WORKER && t.order == O_IDLE) {
+    if (a && !isBuilding(t) && t.type != T_WORKER && kTypes[t.type].damage > 0 && t.order == O_IDLE) {
         t.order = O_ATTACK_MOVE;
         t.dest = a->pos;
         t.target = -1;
@@ -1204,6 +1314,15 @@ void Game::orderConstruct(Entity &e, int building) {
     ents_[building].builder = e.id;
 }
 
+void Game::orderBoard(Entity &e, int vehicle) {
+    if (!isInfantry(e.type) || inside(e)) return;
+    e.order = O_BOARD;
+    e.target = vehicle;
+    e.repath = 0;
+    e.path.clear();
+    e.pathIdx = 0;
+}
+
 void Game::orderStop(Entity &e, bool hold) {
     e.order = hold ? O_HOLD : O_IDLE;
     e.target = -1;
@@ -1268,7 +1387,7 @@ bool Game::canPlace(EType t, int tx, int ty, int owner) const {
     float hx = td.tilesW * TILE * 0.5f, hy = td.tilesH * TILE * 0.5f;
     for (int id: live_) {
         const Entity &e = ents_[id];
-        if (!e.alive || isBuilding(e) || e.owner == owner) continue;
+        if (!e.alive || isBuilding(e) || e.owner == owner || inside(e)) continue;
         if (pointRectDist(e.pos, c, hx, hy) < unitRadius(e)) return false;
     }
     if (t == T_HQ) {

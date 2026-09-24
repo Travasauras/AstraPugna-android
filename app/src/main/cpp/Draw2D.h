@@ -1,5 +1,5 @@
-#ifndef STELLARSIEGE_DRAW2D_H
-#define STELLARSIEGE_DRAW2D_H
+#ifndef ASTRAPUGNA_DRAW2D_H
+#define ASTRAPUGNA_DRAW2D_H
 
 #include <GLES3/gl3.h>
 #include <string>
@@ -78,4 +78,4 @@ private:
     float matrix_[16] = {};
 };
 
-#endif //STELLARSIEGE_DRAW2D_H
+#endif //ASTRAPUGNA_DRAW2D_H

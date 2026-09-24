@@ -1,4 +1,5 @@
 #include "Game.h"
+#include "Sprites.h"
 
 #include <GLES3/gl3.h>
 #include <cstdio>
@@ -23,42 +24,81 @@ static std::string clockText(float seconds) {
 // Shapes
 // ---------------------------------------------------------------------------------------------
 
-void Game::drawUnitShape(Draw2D &d, EType t, int owner, Vec2 p, float s, float facing, bool cargo,
-                         float flash) const {
-    Color tc = teamColor(owner);
-    if (flash > 0) tc = mix(tc, kWhite, 0.6f);
-    Color tcd = shade(tc, 0.6f);
-    Vec2 f = fromAngle(facing), sd{-f.y, f.x};
-    float r = kTypes[t].radius * s;
-    d.circle(p + Vec2(2, 3) * s, r, rgba(0, 0, 0, .3f), 14);
-    switch (t) {
-        case T_WORKER: {
-            Color body = flash > 0 ? rgba(1, .95f, .8f) : rgba(.78f, .66f, .32f);
-            d.line(p + sd * (r * 0.55f), p + sd * (r * 0.55f) + f * (r + 4 * s), 3 * s, rgba(.45f, .45f, .5f));
-            d.circle(p, r, body, 14);
-            d.circle(p, r * 0.55f, tc, 12);
-            d.circle(p + f * (r * 0.35f), r * 0.22f, rgba(.9f, .95f, 1), 8);
-            if (cargo) {
-                Vec2 c = p - f * (r * 0.75f);
-                d.polygon(c, 5.5f * s, 4, facing, rgba(.4f, .9f, 1));
+static Color spriteColor(char ch, Color tc) {
+    switch (ch) {
+        case 'K': return {18, 20, 28, 255};
+        case 'A': return tc;
+        case 'a': return shade(tc, 0.6f);
+        case 'H': return mix(tc, kWhite, 0.5f);
+        case 'V': return {120, 240, 255, 255};
+        case 'v': return {40, 150, 190, 255};
+        case 'G': return {52, 54, 62, 255};
+        case 'g': return {110, 114, 126, 255};
+        case 'M': return {107, 112, 122, 255};
+        case 'm': return {70, 74, 82, 255};
+        case 'L': return {160, 165, 175, 255};
+        case 'T': return {34, 35, 40, 255};
+        case 't': return {84, 86, 94, 255};
+        case 'O': return {214, 150, 58, 255};
+        case 'o': return {150, 100, 40, 255};
+        case 'S': return {226, 178, 138, 255};
+        case 's': return {170, 120, 90, 255};
+        case 'Y': return {255, 200, 60, 255};
+        case 'W': return {235, 238, 245, 255};
+        default: return {255, 0, 255, 255};
+    }
+}
+
+// Draws a sprite centered on p. Runs of same-colored pixels in a row become one rect.
+static void drawSprite(Draw2D &d, const Sprite &sp, Vec2 p, float px, bool flip, Color tc, float flash) {
+    float x0 = p.x - sp.w * px * 0.5f, y0 = p.y - sp.h * px * 0.5f;
+    for (int y = 0; y < sp.h; ++y) {
+        const char *row = sp.rows[y];
+        int x = 0;
+        while (x < sp.w) {
+            char ch = row[x];
+            int x2 = x + 1;
+            while (x2 < sp.w && row[x2] == ch) ++x2;
+            if (ch != '.') {
+                Color c = spriteColor(ch, tc);
+                if (flash > 0) c = mix(c, kWhite, 0.55f);
+                float left = flip ? sp.w - x2 : x;
+                d.rect(x0 + left * px, y0 + y * px, (x2 - x) * px, px, c);
             }
-            break;
+            x = x2;
         }
-        case T_TROOPER:
-            d.line(p + sd * (r * 0.45f), p + sd * (r * 0.45f) + f * (r + 8 * s), 3.2f * s, rgba(.18f, .18f, .2f));
-            d.circle(p, r, tcd, 14);
-            d.circle(p, r * 0.78f, tc, 14);
-            d.circle(p + f * (r * 0.35f), r * 0.32f, rgba(.75f, .95f, 1), 10);
-            break;
-        case T_TANK:
-            d.orientedRect(p, f, 17 * s, 13 * s, rgba(.16f, .16f, .18f));
-            d.orientedRect(p + f * (1 * s), f, 14 * s, 9.5f * s, tcd);
-            d.line(p, p + f * (25 * s), 4.5f * s, rgba(.25f, .25f, .28f));
-            d.circle(p, 8.5f * s, tc, 14);
-            d.circle(p - f * (2 * s), 3.2f * s, tcd, 8);
-            break;
-        default:
-            break;
+    }
+}
+
+void Game::drawUnitShape(Draw2D &d, EType t, int owner, Vec2 p, float s, float facing, bool cargo,
+                         float flash, int riders) const {
+    const Sprite *sp = unitSprite(t);
+    if (!sp) return;
+    Color tc = teamColor(owner);
+    float px = sp->px * s;
+    bool flip = std::cos(facing) < -0.05f;
+    float r = kTypes[t].radius * s;
+    d.circle(p + Vec2(0, sp->h * px * 0.42f), r * 0.9f, rgba(0, 0, 0, .28f), 14);
+    drawSprite(d, *sp, p, px, flip, tc, flash);
+
+    // Extra pixels drawn on top of the sprite, mirrored the same way it is.
+    Vec2 origin = p - Vec2(sp->w, sp->h) * (px * 0.5f);
+    auto pixels = [&](int x, int y, int w, int h, Color c) {
+        float left = flip ? sp->w - (x + w) : x;
+        d.rect(origin.x + left * px, origin.y + y * px, w * px, h * px, c);
+    };
+    if (t == T_WORKER && cargo) {
+        pixels(1, 8, 3, 3, spriteColor('K', tc));
+        pixels(2, 9, 1, 1, spriteColor('V', tc));
+    }
+    if (t == T_ROVER) {
+        // Helmets of the soldiers riding in the open bed.
+        for (int i = 0; i < riders && i < kTransportSlots; ++i) {
+            int x = 1 + i * 4;
+            pixels(x - 1, 2, 4, 3, spriteColor('K', tc));
+            pixels(x, 3, 2, 2, spriteColor('A', tc));
+            pixels(x + 1, 3, 1, 1, spriteColor('V', tc));
+        }
     }
 }
 
@@ -150,8 +190,10 @@ void Game::drawBuildingShape(Draw2D &d, EType t, int owner, const Rectf &r, floa
 void Game::drawIcon(Draw2D &d, EType t, int owner, Vec2 c, float size) const {
     const TypeDef &td = kTypes[t];
     if (!td.building) {
-        float s = size / (td.radius * 2.f + (t == T_TANK ? 12.f : 10.f));
-        drawUnitShape(d, t, owner, c + Vec2(0, 0), s, -kPi / 2, false, 0);
+        const Sprite *sp = unitSprite(t);
+        if (!sp) return;
+        float s = size / (std::max(sp->w, sp->h) * sp->px);
+        drawUnitShape(d, t, owner, c, s, 0, false, 0);
         return;
     }
     float w = size, h = size;
@@ -253,16 +295,37 @@ void Game::renderWorld(Draw2D &d) {
         d.tri(e->rally + Vec2(0, -18), e->rally + Vec2(12, -13), e->rally + Vec2(0, -8), rgba(.3f, 1, .4f));
     }
 
+    // Officer auras, under the units
+    for (int id: live_) {
+        const Entity &e = ents_[id];
+        if (!e.alive || e.type != T_OFFICER || !inView(e.pos, kAuraRadius)) continue;
+        if (e.owner != PLAYER && !visibleToPlayer(e)) continue;
+        Color tc = teamColor(e.owner);
+        d.circle(e.pos, kAuraRadius, fade(tc, selected[id] ? .1f : .05f), 40);
+        d.ring(e.pos, kAuraRadius, 1.5f, fade(tc, selected[id] ? .5f : .22f), 40);
+    }
+
     // Units
     for (int id: live_) {
         const Entity &e = ents_[id];
-        if (!e.alive || isBuilding(e) || !inView(e.pos, 40)) continue;
+        if (!e.alive || isBuilding(e) || inside(e) || !inView(e.pos, 40)) continue;
         if (e.owner != PLAYER && !visibleToPlayer(e)) continue;
         if (selected[id]) {
             Color sc = e.owner == PLAYER ? rgba(.3f, 1, .4f) : rgba(1, .3f, .25f);
             d.ring(e.pos, unitRadius(e) + 4, 2, sc, 20);
         }
-        drawUnitShape(d, e.type, e.owner, e.pos, 1.f, e.facing, e.cargo > 0, e.flash);
+        drawUnitShape(d, e.type, e.owner, e.pos, 1.f, e.facing, e.cargo > 0, e.flash,
+                      (int) e.passengers.size());
+        if (e.type == T_TANK && !e.passengers.empty()) {
+            // Seat pips: how many soldiers are inside.
+            float pw = 5, gap = 2, w = kTransportSlots * pw + (kTransportSlots - 1) * gap;
+            float x = e.pos.x - w * 0.5f, y = e.pos.y + unitRadius(e) + 4;
+            for (int i = 0; i < kTransportSlots; ++i) {
+                float px = x + i * (pw + gap);
+                d.rect(px - 1, y - 1, pw + 2, pw + 2, rgba(0, 0, 0, .7f));
+                if (i < (int) e.passengers.size()) d.rect(px, y, pw, pw, teamColor(e.owner));
+            }
+        }
     }
 
     // Projectiles
@@ -331,7 +394,7 @@ void Game::renderWorld(Draw2D &d) {
     // Health bars & progress
     for (int id: live_) {
         const Entity &e = ents_[id];
-        if (!e.alive || e.type == T_MINERAL || !inView(e.pos, 4 * TILE)) continue;
+        if (!e.alive || e.type == T_MINERAL || inside(e) || !inView(e.pos, 4 * TILE)) continue;
         bool vis = e.owner == PLAYER || visibleToPlayer(e);
         if (!vis) continue;
         const TypeDef &td = kTypes[e.type];
@@ -422,6 +485,9 @@ void Game::renderHud(Draw2D &d) {
     } else if (mode_ == MODE_ATTACK) {
         d.textCentered("ATTACK: TAP AN ENEMY OR A LOCATION", screenW_ * 0.5f, panelY_ - 26 * u, 2 * u,
                        rgba(1, .6f, .5f, .9f));
+    } else if (mode_ == MODE_BOARD) {
+        d.textCentered("BOARD: TAP ONE OF YOUR TANKS OR ROVERS", screenW_ * 0.5f, panelY_ - 26 * u, 2 * u,
+                       rgba(.5f, 1, .6f, .9f));
     }
 
     // Box selection
@@ -470,6 +536,19 @@ void Game::renderHud(Draw2D &d) {
                 d.rect(ic.x - is * 0.5f, ic.y - 1.5f * u, is, 3 * u, rgba(1, .35f, .3f));
                 d.rect(ic.x - 1.5f * u, ic.y - is * 0.5f, 3 * u, is, rgba(1, .35f, .3f));
                 break;
+            case A_BOARD:
+            case A_UNLOAD: {
+                // A vehicle bay with an arrow going in (board) or out (unload).
+                Color c = rgba(.45f, .95f, .55f);
+                d.rectOutline(ic.x - is * 0.4f, ic.y, is * 0.8f, is * 0.35f, 2.5f * u, c);
+                float tip = b.action == A_BOARD ? ic.y + is * 0.1f : ic.y - is * 0.45f;
+                float tail = b.action == A_BOARD ? ic.y - is * 0.45f : ic.y + is * 0.1f;
+                float head = b.action == A_BOARD ? -1.f : 1.f;
+                d.rect(ic.x - 1.5f * u, std::min(tip, tail), 3 * u, std::fabs(tail - tip), c);
+                d.tri({ic.x - is * 0.18f, tip + head * is * 0.18f}, {ic.x + is * 0.18f, tip + head * is * 0.18f},
+                      {ic.x, tip}, c);
+                break;
+            }
             case A_CANCEL:
             case A_DEQUEUE:
                 d.line(ic + Vec2(-is, -is) * 0.3f, ic + Vec2(is, is) * 0.3f, 5 * u, rgba(.9f, .3f, .25f));
@@ -521,7 +600,7 @@ void Game::renderMinimap(Draw2D &d) {
             const TypeDef &td = kTypes[e.type];
             d.rect(m.x + e.tx * sx, m.y + e.ty * sy, td.tilesW * sx, td.tilesH * sy, teamColor(e.owner));
         } else {
-            if (e.owner != PLAYER && !visibleToPlayer(e)) continue;
+            if (inside(e) || (e.owner != PLAYER && !visibleToPlayer(e))) continue;
             d.rect(m.x + e.pos.x / TILE * sx - dot * 0.5f, m.y + e.pos.y / TILE * sy - dot * 0.5f, dot, dot,
                    teamColor(e.owner));
         }
@@ -590,9 +669,21 @@ void Game::renderSelectionInfo(Draw2D &d) {
                 case O_RETURN: status = "RETURNING CARGO"; break;
                 case O_BUILD: status = "GOING TO BUILD SITE"; break;
                 case O_CONSTRUCT: status = "CONSTRUCTING"; break;
+                case O_BOARD: status = "BOARDING"; break;
                 default: break;
             }
-            if (e.owner == PLAYER) d.text(status, tx, ly, 1.7f * u, rgba(.5f, .9f, 1));
+            if (e.owner == PLAYER) {
+                d.text(status, tx, ly, 1.7f * u, rgba(.5f, .9f, 1));
+                ly += 22 * u;
+            }
+            if (e.type == T_OFFICER) {
+                d.text("AURA: +25% DMG, FIRE RATE, +1 ARMOR", tx, ly, 1.5f * u, rgba(1, .85f, .4f));
+            } else if (isTransport(e.type)) {
+                std::string seats = "PASSENGERS " + std::to_string(e.passengers.size()) + "/" +
+                                    std::to_string(kTransportSlots);
+                if (e.type == T_ROVER) seats += " - THEY FIRE FROM INSIDE";
+                d.text(seats, tx, ly, 1.5f * u, rgba(.45f, .95f, .55f));
+            }
             return;
         }
         if (!e.complete) {
@@ -665,8 +756,8 @@ void Game::renderTitle(Draw2D &d) {
     d.circle(planet + Vec2(-pr * 0.3f, -pr * 0.35f), pr * 0.2f, rgba(.26f, .18f, .13f), 32);
 
     float tpx = std::min(10 * u, screenW_ / (13 * 6.f + 4));
-    d.textCentered("STELLAR SIEGE", screenW_ * 0.5f + 4 * u, screenH_ * 0.16f + 4 * u, tpx, rgba(0, 0, 0, .6f));
-    d.textCentered("STELLAR SIEGE", screenW_ * 0.5f, screenH_ * 0.16f, tpx, rgba(.4f, .75f, 1));
+    d.textCentered("ASTRA PUGNA", screenW_ * 0.5f + 4 * u, screenH_ * 0.16f + 4 * u, tpx, rgba(0, 0, 0, .6f));
+    d.textCentered("ASTRA PUGNA", screenW_ * 0.5f, screenH_ * 0.16f, tpx, rgba(.4f, .75f, 1));
     d.textCentered("A REAL-TIME STRATEGY GAME", screenW_ * 0.5f, screenH_ * 0.16f + 9 * tpx, 2.4f * u,
                    rgba(.75f, .8f, .9f));
 

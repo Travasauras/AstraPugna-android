@@ -18,7 +18,8 @@ add_library(astrapugna SHARED
         Game.cpp
         GameAI.cpp
         GameInput.cpp
-        GameRender.cpp)
+        GameRender.cpp
+        Sprites.cpp)
 
 # Searches for a package provided by the game activity dependency
 find_package(game-activity REQUIRED CONFIG)

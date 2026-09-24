@@ -28,9 +28,11 @@ void Game::aiThink() {
             workers.push_back(id);
             if (e.order == O_BUILD) pending[e.buildType]++;
         } else if (!isBuilding(e)) {
-            army.push_back(id);
+            count[e.type]++;
+            if (!inside(e)) army.push_back(id);
         } else {
             count[e.type]++;
+            for (EType q: e.queue) count[q]++;
             if (!e.complete) incomplete.push_back(id);
             else if (e.type == T_BARRACKS || e.type == T_FACTORY) producers.push_back(id);
         }
@@ -98,7 +100,14 @@ void Game::aiThink() {
     for (int id: producers) {
         Entity &b = ents_[id];
         if (b.queue.size() >= 2) continue;
-        EType u = b.type == T_FACTORY ? T_TANK : T_TROOPER;
+        EType u = T_TANK;
+        if (b.type == T_BARRACKS) {
+            // Mostly marines, some sharpshooters, and an officer or two once teched up.
+            int wantOfficers = 1 + difficulty_ / 2;
+            u = T_MARINE;
+            if (hasComplete(me, T_FACTORY) && count[T_OFFICER] < wantOfficers) u = T_OFFICER;
+            else if (rng_.f() < 0.3f) u = T_SNIPER;
+        }
         if (minerals_[me] - reserve >= kTypes[u].cost) tryTrain(b, u);
     }
 

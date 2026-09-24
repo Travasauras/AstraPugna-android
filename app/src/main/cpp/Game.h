@@ -1,5 +1,5 @@
-#ifndef STELLARSIEGE_GAME_H
-#define STELLARSIEGE_GAME_H
+#ifndef ASTRAPUGNA_GAME_H
+#define ASTRAPUGNA_GAME_H
 
 #include <deque>
 #include <string>
@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------------------------
 
 enum EType : uint8_t {
-    T_WORKER, T_TROOPER, T_TANK,
+    T_WORKER, T_MARINE, T_SNIPER, T_OFFICER, T_TANK, T_ROVER,
     T_HQ, T_DEPOT, T_BARRACKS, T_FACTORY, T_TURRET,
     T_MINERAL,
     T_COUNT
@@ -40,9 +40,18 @@ constexpr int MAX_SUPPLY = 200;
 
 extern const TypeDef kTypes[T_COUNT];
 
+// Tanks and rovers carry soldiers; a rover's passengers fire from inside it.
+constexpr int kTransportSlots = 4;
+// Officers boost allies within this radius: more damage, faster fire, +1 armor.
+constexpr float kAuraRadius = 5 * TILE;
+constexpr float kAuraDamage = 1.25f, kAuraCooldown = 0.75f, kAuraArmor = 1.f;
+
+inline bool isInfantry(EType t) { return t == T_MARINE || t == T_SNIPER || t == T_OFFICER; }
+inline bool isTransport(EType t) { return t == T_TANK || t == T_ROVER; }
+
 enum Order : uint8_t {
     O_IDLE, O_MOVE, O_ATTACK_MOVE, O_ATTACK, O_HOLD,
-    O_GATHER, O_RETURN, O_BUILD, O_CONSTRUCT
+    O_GATHER, O_RETURN, O_BUILD, O_CONSTRUCT, O_BOARD
 };
 
 struct Entity {
@@ -69,6 +78,10 @@ struct Entity {
     EType buildType = T_COUNT;
     int bx = 0, by = 0;
 
+    // Transports
+    int transport = -1;            // vehicle this unit is riding in, -1 = on foot
+    std::vector<int> passengers;   // units riding in this vehicle
+
     // Buildings
     int tx = 0, ty = 0;
     bool complete = true;
@@ -87,6 +100,7 @@ struct Entity {
 };
 
 inline bool isBuilding(const Entity &e) { return kTypes[e.type].building; }
+inline bool inside(const Entity &e) { return e.transport >= 0; }
 inline float unitRadius(const Entity &e) { return kTypes[e.type].radius; }
 
 inline void halfExtents(const Entity &e, float &hx, float &hy) {
@@ -159,6 +173,7 @@ private:
     void rebuildLive();
     void updateUnit(Entity &e, float dt);
     void updateWorker(Entity &e, float dt);
+    void updatePassenger(Entity &e, float dt);
     void updateBuilding(Entity &e, float dt);
     void updateShots(float dt);
     void fight(Entity &e, Entity &t, float dt, bool canMove);
@@ -169,6 +184,9 @@ private:
     bool canTarget(const Entity &e, const Entity &t) const;
     bool inRange(const Entity &e, const Entity &t) const;
     float gap(const Entity &a, const Entity &b) const;
+    bool buffed(const Entity &e) const;
+    void board(Entity &e, Entity &vehicle);
+    void unload(Entity &vehicle);
     bool follow(Entity &e, float dt);
     void moveDirect(Entity &e, Vec2 goal, float dt);
     void moveToward(Entity &e, const Entity &t, float dt, float repathInterval);
@@ -191,6 +209,7 @@ private:
     void orderBuild(Entity &e, EType t, int tx, int ty);
     void orderConstruct(Entity &e, int building);
     void orderStop(Entity &e, bool hold);
+    void orderBoard(Entity &e, int vehicle);
 
     // Map / queries
     bool inMap(int x, int y) const { return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H; }
@@ -223,7 +242,9 @@ private:
     bool aiFindSite(EType t, Vec2 home, int &outX, int &outY);
 
     // ----- Input & commands (GameInput.cpp)
-    enum Action { A_TRAIN, A_BUILD, A_STOP, A_HOLD, A_ATTACK, A_CANCEL, A_DEQUEUE, A_IDLE, A_ARMY };
+    enum Action {
+        A_TRAIN, A_BUILD, A_STOP, A_HOLD, A_ATTACK, A_CANCEL, A_DEQUEUE, A_IDLE, A_ARMY, A_BOARD, A_UNLOAD
+    };
     struct Button {
         Rectf r;
         Action action;
@@ -241,6 +262,7 @@ private:
     int pickEntity(Vec2 w, float tol) const;
     void commandSmart(Vec2 w, int hit);
     void commandAttack(Vec2 w, int hit);
+    void commandBoard(int hit);
     void formationMove(const std::vector<int> &units, Vec2 p, bool attack);
     void tryPlaceBuilding(Vec2 w);
     void placementTile(Vec2 w, int &tx, int &ty) const;
@@ -265,7 +287,7 @@ private:
     void renderSelectionInfo(Draw2D &d);
     void renderEnd(Draw2D &d);
     void drawUnitShape(Draw2D &d, EType t, int owner, Vec2 p, float s, float facing, bool cargo,
-                       float flash) const;
+                       float flash, int riders = 0) const;
     void drawBuildingShape(Draw2D &d, EType t, int owner, const Rectf &r, float facing,
                            float flash) const;
     void drawIcon(Draw2D &d, EType t, int owner, Vec2 c, float size) const;
@@ -313,7 +335,7 @@ private:
     Vec2 cam_;
     float scale_ = 1.3f;
     std::vector<int> sel_;
-    enum Mode { MODE_NORMAL, MODE_PLACE, MODE_ATTACK } mode_ = MODE_NORMAL;
+    enum Mode { MODE_NORMAL, MODE_PLACE, MODE_ATTACK, MODE_BOARD } mode_ = MODE_NORMAL;
     EType placeType_ = T_COUNT;
     Vec2 placePos_;
     bool placeVisible_ = false;
@@ -335,4 +357,4 @@ private:
     std::vector<Button> buttons_;
 };
 
-#endif //STELLARSIEGE_GAME_H
+#endif //ASTRAPUGNA_GAME_H
